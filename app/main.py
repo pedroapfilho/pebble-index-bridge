@@ -128,17 +128,27 @@ async def index_webhook(request: Request, authorization: str | None = Header(def
 
     await enforce_rate_limit()
     try:
-        form = await request.form(max_files=0, max_fields=3, max_part_size=MAX_REQUEST_BYTES)
+        # Pebble may attach an audio file even when transcription is enabled.
+        # Accept a small number of file parts and ignore them; we only forward text.
+        form = await request.form(max_files=2, max_fields=8, max_part_size=MAX_REQUEST_BYTES)
     except Exception:
         log.warning("security_event=malformed_multipart")
         raise HTTPException(status_code=400, detail="Malformed request")
 
-    allowed = {"transcription", "recordedAt", "client"}
-    if any(k not in allowed for k in form.keys()):
-        log.warning("security_event=unexpected_form_field")
-        raise HTTPException(status_code=400, detail="Unexpected form field")
+    from starlette.datastructures import UploadFile
 
-    raw = form.get("transcription")
+    allowed = {"transcription", "recordedAt", "client"}
+    fields = {}
+    for key, value in form.multi_items():
+        if isinstance(value, UploadFile):
+            log.info("ignored_upload field=%s filename=%s", key, getattr(value, "filename", None))
+            continue
+        if key not in allowed:
+            log.warning("security_event=unexpected_form_field field=%s", key)
+            raise HTTPException(status_code=400, detail="Unexpected form field")
+        fields[key] = value
+
+    raw = fields.get("transcription")
     if not isinstance(raw, str):
         raise HTTPException(status_code=400, detail="Missing transcription")
     text = unicodedata.normalize("NFC", raw).strip()
@@ -146,8 +156,8 @@ async def index_webhook(request: Request, authorization: str | None = Header(def
         log.warning("security_event=invalid_transcription chars=%d", len(text))
         raise HTTPException(status_code=400, detail="Invalid transcription")
 
-    recorded_at = form.get("recordedAt")
-    client_name = form.get("client") or "ring"
+    recorded_at = fields.get("recordedAt")
+    client_name = fields.get("client") or "ring"
     if recorded_at is not None and (not isinstance(recorded_at, str) or len(recorded_at) > 32 or not recorded_at.isdigit()):
         raise HTTPException(status_code=400, detail="Invalid recordedAt")
     if not isinstance(client_name, str) or len(client_name) > 32 or CONTROL_RE.search(client_name):

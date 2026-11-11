@@ -3,8 +3,6 @@ services:
     build: .
     container_name: index-bridge
     restart: unless-stopped
-    ports:
-      - "127.0.0.1:8000:8000"
     env_file:
       - .env
     read_only: true
@@ -18,3 +16,17 @@ services:
     mem_limit: 128m
     cpus: 0.50
     stop_grace_period: 10s
+    networks:
+      - traefik_proxy
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.index-bridge.rule=Host(`index.homelab0.com`) || Host(`index.homelab0.local`)
+      - traefik.http.routers.index-bridge.entrypoints=websecure
+      - traefik.http.routers.index-bridge.tls=true
+      - traefik.http.services.index-bridge.loadbalancer.server.port=8000
+      - traefik.docker.network=traefik_proxy
+
+networks:
+  traefik_proxy:
+    name: traefik_proxy
+    external: true
